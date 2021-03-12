@@ -2,9 +2,16 @@
 
 namespace WolfpackIT\oauth\components;
 
-use Lcobucci\JWT\Parser;
+use Lcobucci\Clock\SystemClock;
+use Lcobucci\JWT\Configuration;
+use Lcobucci\JWT\Encoding\CannotDecodeContent;
+use Lcobucci\JWT\Signer\Key\InMemory;
+use Lcobucci\JWT\Signer\Key\LocalFileReference;
 use Lcobucci\JWT\Signer\Rsa\Sha256;
 use Lcobucci\JWT\Token;
+use Lcobucci\JWT\UnencryptedToken;
+use Lcobucci\JWT\Validation\Constraint\StrictValidAt;
+use Lcobucci\JWT\Validation\RequiredConstraintsViolated;
 use Lcobucci\JWT\ValidationData;
 use League\OAuth2\Server\CryptKey;
 use League\OAuth2\Server\Repositories\AccessTokenRepositoryInterface;
@@ -12,6 +19,7 @@ use WolfpackIT\oauth\components\repository\AccessTokenRepository;
 use WolfpackIT\oauth\Module;
 use yii\base\Component;
 use yii\base\InvalidConfigException;
+use yii\di\Instance;
 use yii\web\Request;
 use yii\web\UnauthorizedHttpException;
 
@@ -59,10 +67,7 @@ class AccessTokenService extends Component
         }
 
         $this->publicKey = $this->publicKey ?? Module::getInstance()->publicKey;
-
-        if (!isset($this->publicKey) || !$this->publicKey instanceof CryptKey) {
-            throw new InvalidConfigException('PublicKey must be set and be instance of ' . CryptKey::class);
-        }
+        Instance::ensure($this->publicKey, CryptKey::class);
 
         parent::init();
     }
@@ -113,26 +118,29 @@ class AccessTokenService extends Component
     public function getAndValidateToken($jwt): Token
     {
         try {
-            $token = (new Parser())->parse($jwt);
+            $configuration = Configuration::forAsymmetricSigner(
+                new Sha256(),
+                InMemory::plainText(''),
+                LocalFileReference::file($this->publicKey->getKeyPath())
+            );
 
             try {
-                if ($token->verify(new Sha256(), $this->publicKey->getKeyPath()) === false) {
-                    throw new UnauthorizedHttpException('Access token could not be verified');
-                }
-            } catch (\BadMethodCallException $exception) {
-                throw new UnauthorizedHttpException('Access token is not signed');
+                $token = $configuration->parser()->parse($jwt);
+            } catch (CannotDecodeContent | Token\InvalidTokenStructure | Token\UnsupportedHeaderFound $e) {
+                throw new UnauthorizedHttpException('Failed parsing access token with message: ' . $exception->getMessage(), 0, $e);
             }
 
-            // Ensure access token hasn't expired
-            $data = new ValidationData();
-            $data->setCurrentTime(time());
+            $constraints = [
+                new StrictValidAt(SystemClock::fromSystemTimezone()),
+            ];
 
-            if ($token->validate($data) === false) {
-                throw new UnauthorizedHttpException('Access token is invalid');
+            try {
+                $configuration->validator()->assert($token, ...$constraints);
+            } catch (RequiredConstraintsViolated $e) {
+                throw new UnauthorizedHttpException('Access token is invalid', 0, $e);
             }
 
-            // Check if token has been revoked
-            if ($this->accessTokenRepository->isAccessTokenRevoked($token->getClaim('jti'))) {
+            if ($this->accessTokenRepository->isAccessTokenRevoked($token->claims()->get('jti'))) {
                 throw new UnauthorizedHttpException('Access token has been revoked');
             }
 

@@ -30,33 +30,14 @@ class ClientRepository
      * @return Client|null
      */
     public function getClientEntity(
-        $clientIdentifier,
-        $grantType = null,
-        $clientSecret = null,
-        $mustValidateSecret = true
+        $clientIdentifier
     ): ?Client {
-        /** @var Client $client */
-        $client = $this->modelClass::find()
+        return $this->modelClass::find()
             ->active()
             ->notDeleted()
-            ->innerJoinWith(['clientGrantTypes' => function(ActiveQuery $query) use ($grantType) {
-                return $query->andFilterWhere(['grant_type' => $grantType]);
-            }])
             ->andWhere(['identifier' => $clientIdentifier])
             ->one()
         ;
-
-        if (
-            !is_null($client)
-            && (
-                $mustValidateSecret === false
-                || $client->getIsConfidential() === false
-                || $client->secretVerify($clientSecret))
-        ) {
-            return $client;
-        }
-
-        return null;
     }
 
     public function init()
@@ -66,5 +47,30 @@ class ClientRepository
         }
 
         parent::init();
+    }
+
+    /**
+     * @param string $clientIdentifier
+     * @param null|string $clientSecret
+     * @param null|string $grantType
+     * @return bool
+     */
+    public function validateClient($clientIdentifier, $clientSecret, $grantType): bool
+    {
+        $client = $this->getClientEntity($clientIdentifier);
+
+        if (
+            !$client
+            || !$client->getClientGrantTypes()->andWhere(['grant_type' => $grantType])->exists()
+        ) {
+            return false;
+        }
+
+
+        if ($client->isConfidential()) {
+            return $client->secretVerify($clientSecret);
+        }
+
+        return true;
     }
 }

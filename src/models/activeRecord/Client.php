@@ -225,14 +225,6 @@ class Client
     }
 
     /**
-     * @return bool
-     */
-    public function getIsConfidential(): bool
-    {
-        return !is_null($this->secret);
-    }
-
-    /**
      * @return string
      */
     public function getDisplayStatus(): string
@@ -272,6 +264,14 @@ class Client
         return $this->hasMany(Scope::class, ['id' => 'scope_id'])
             ->via('clientScopes', $callable)
         ;
+    }
+
+    /**
+     * @return bool
+     */
+    public function isConfidential(): bool
+    {
+        return !is_null($this->secret);
     }
 
     /**
